@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ORCHARD:1-1 Translator (improved)</title>
+<style>
+  body { font-family: monospace; background:#111; color:#eee; padding:20px; }
+  textarea { width:100%; height:140px; background:#000; color:#0f0; padding:10px; box-sizing:border-box; }
+  button { margin:8px 6px 0 0; padding:8px 12px; }
+  .row { display:flex; gap:10px; align-items:center; margin-top:8px; }
+  .small { font-size:0.85rem; color:#aaa; }
+  .controls { margin:10px 0; }
+  label { margin-left:8px; }
+  pre.example { background:#000; color:#8ff; padding:10px; overflow:auto; }
+</style>
+</head>
+<body>
+
+<h2>ORCHARD:1-1 Translator (improved)</h2>
+
+<textarea id="input" placeholder="Enter text here..."></textarea>
+
+<div class="controls">
+  <button onclick="encode()">Encode → Fruit</button>
+  <button onclick="decode()">Decode → Text</button>
+  <button onclick="copyOutput()">Copy Output</button>
+  <button onclick="clearAll()">Clear</button>
+  <label><input type="checkbox" id="preserveCase" /> Preserve case (adds CAP token)</label>
+  <div class="small">Space token: <code>Pear</code>. Shift tokens: <code>Shift1</code>, <code>Shift2</code>, <code>Shift3</code>, <code>Shift5</code>.</div>
+</div>
+
+<textarea id="output" placeholder="Output..."></textarea>
+
+<h3>Examples</h3>
+<pre class="example">
+Input:  Hello World
+Encode: Honeydew
+       Elderberry
+       Lemon
+       Lemon
+       Orange
+       Pear
+       Watermelon
+       Orange
+       Raspberry
+       Lemon
+       Date
+
+(If "Preserve case" checked, "CAP" will appear before fruits for capital letters.)
+</pre>
+
+<script>
+/* FULL ALPHABET BASE MAP (A-Z) */
+const baseMap = {
+  A: "Apple",      B: "Banana",   C: "Cherry",   D: "Date",      E: "Elderberry",
+  F: "Fig",        G: "Grape",    H: "Honeydew", I: "Kiwi",      J: "Jackfruit",
+  K: "Kumquat",    L: "Lemon",    M: "Mango",    N: "Nectarine", O: "Orange",
+  P: "Papaya",     Q: "Quince",   R: "Raspberry",S: "Strawberry",T: "Tangerine",
+  U: "Ugli",       V: "Vanilla",  W: "Watermelon",X: "Xigua",    Y: "Yuzu",
+  Z: "Zucchini"
+};
+
+/* reverse lookup: fruit -> letter */
+const reverseBase = Object.fromEntries(
+  Object.entries(baseMap).map(([k,v]) => [v, k])
+);
+
+/* SHIFT TOKENS (distinct from base fruits) */
+const shifts = {
+  Shift1: 1,
+  Shift2: 2,
+  Shift3: 3,
+  Shift5: 5
+};
+
+/* special tokens */
+const SPACE_TOKEN = "Pear";
+const CAP_TOKEN = "CAP";
+
+/* helper to split tokens (allow newline or spaces) */
+function tokenize(text) {
+  return text.split(/\s+/).filter(Boolean);
+}
+
+/* ENCODE */
+function encode() {
+  const preserveCase = document.getElementById("preserveCase").checked;
+  const raw = document.getElementById("input").value;
+  let out = [];
+
+  for (let ch of raw) {
+    if (ch === " ") {
+      out.push(SPACE_TOKEN);
+      continue;
+    }
+
+    const isLetter = /[A-Za-z]/.test(ch);
+    if (!isLetter) {
+      // emit punctuation unchanged (so it round-trips visibly)
+      out.push(ch);
+      continue;
+    }
+
+    const isUpper = ch === ch.toUpperCase();
+    const upper = ch.toUpperCase();
+
+    // Preserve case using CAP token if requested
+    if (preserveCase && isUpper) {
+      out.push(CAP_TOKEN);
+    }
+
+    // Direct mapping available for every A-Z
+    if (baseMap[upper]) {
+      out.push(baseMap[upper]);
+      continue;
+    }
+
+    // Fallback: find base + shift that reaches this letter (handles extended alphabets)
+    const targetCode = upper.charCodeAt(0) - 65;
+    let encoded = null;
+    for (let [baseLetter, fruit] of Object.entries(baseMap)) {
+      const baseCode = baseLetter.charCodeAt(0) - 65;
+      for (let [shiftToken, shiftVal] of Object.entries(shifts)) {
+        if ((baseCode + shiftVal) % 26 === targetCode) {
+          encoded = [fruit, shiftToken];
+          break;
+        }
+      }
+      if (encoded) break;
+    }
+    if (encoded) out.push(...encoded);
+    else out.push(baseMap[upper] || "?");
+  }
+
+  document.getElementById("output").value = out.join("\n");
+}
+
+/* DECODE */
+function decode() {
+  const lines = tokenize(document.getElementById("input").value);
+  let result = "";
+  let capNext = false;
+
+  for (let token of lines) {
+    if (token === SPACE_TOKEN) {
+      result += " ";
+      capNext = false;
+      continue;
+    }
+
+    if (token === CAP_TOKEN) {
+      capNext = true;
+      continue;
+    }
+
+    // punctuation tokens were left as-is by encoder
+    if (!reverseBase[token] && !shifts[token]) {
+      // treat as literal character
+      result += token;
+      capNext = false;
+      continue;
+    }
+
+    if (reverseBase[token]) {
+      let letter = reverseBase[token];
+      if (capNext) {
+        letter = letter.toUpperCase();
+      } else {
+        letter = letter.toLowerCase();
+      }
+      result += letter;
+      capNext = false;
+      continue;
+    }
+
+    // token is a shift token and should modify the previous letter if present
+    if (shifts[token]) {
+      // find last actual letter index in result
+      if (result.length === 0) continue;
+      // work with uppercase to compute reliably
+      const lastIdx = result.length - 1;
+      let baseChar = result[lastIdx];
+      const isUpper = baseChar === baseChar.toUpperCase() && /[A-Za-z]/.test(baseChar);
+      let code = baseChar.toUpperCase().charCodeAt(0) - 65;
+      code = (code + shifts[token]) % 26;
+      let newChar = String.fromCharCode(code + 65);
+      newChar = isUpper ? newChar.toUpperCase() : newChar.toLowerCase();
+      result = result.slice(0, -1) + newChar;
+    }
+  }
+
+  document.getElementById("output").value = result;
+}
+
+/* small utilities */
+function copyOutput() {
+  const out = document.getElementById("output");
+  out.select();
+  document.execCommand("copy");
+  alert("Output copied to clipboard");
+}
+
+function clearAll() {
+  document.getElementById("input").value = "";
+  document.getElementById("output").value = "";
+}
+</script>
+
+</body>
+</html>
